@@ -12,8 +12,9 @@ import matplotlib.pyplot as plt
 # --------------------------------------------- #
 
 class ImagePaths(Dataset):
-    def __init__(self, path, size=None):
+    def __init__(self, path, in_channels, size=None):
         self.size = size
+        self.in_channels = in_channels
 
         self.images = [os.path.join(path, file) for file in os.listdir(path)]
         self._length = len(self.images)
@@ -33,6 +34,8 @@ class ImagePaths(Dataset):
         image = self.preprocessor(image=image)["image"]
         image = (image / 127.5 - 1.0).astype(np.float32)
         image = image.transpose(2, 0, 1)
+        if image.shape[0] > self.in_channels:
+            image = image[:self.in_channels]
         return image
 
     def __getitem__(self, i):
@@ -41,7 +44,7 @@ class ImagePaths(Dataset):
 
 
 def load_data(args):
-    train_data = ImagePaths(args.dataset_path, size=256)
+    train_data = ImagePaths(args.dataset_path, size=256, in_channels=args.in_channels)
     train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=False)
     return train_loader
 
