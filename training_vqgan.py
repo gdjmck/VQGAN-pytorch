@@ -9,6 +9,7 @@ from discriminator import Discriminator
 from lpips import LPIPS
 from vqgan import VQGAN
 from utils import load_data, weights_init
+from torch.utils.tensorboard import SummaryWriter
 
 
 class TrainVQGAN:
@@ -19,7 +20,15 @@ class TrainVQGAN:
         self.perceptual_loss = LPIPS().eval().to(device=args.device)
         self.opt_vq, self.opt_disc = self.configure_optimizers(args)
 
-        self.prepare_training()
+        self.prepare_training(args)
+        self.summary_writer = SummaryWriter(log_dir=os.path.join(args.checkpoint_dir, 'tb'))
+        self.step = 0
+        if args.load:
+            # load from checkpoint
+            ckpt = torch.load(args.load)
+            self.step = ckpt['iter']
+            self.vqgan.load_state_dict(ckpt['state_dict']['vqgan'])
+            self.discriminator.load_state_dict(ckpt['state_dict']['disc'])
 
         self.train(args)
 
@@ -39,9 +48,10 @@ class TrainVQGAN:
         return opt_vq, opt_disc
 
     @staticmethod
-    def prepare_training():
+    def prepare_training(args):
         os.makedirs("results", exist_ok=True)
-        os.makedirs("checkpoints", exist_ok=True)
+        os.makedirs(args.checkpoint_dir, exist_ok=True)
+        os.makedirs(os.path.join(args.checkpoint_dir, 'tb'), exist_ok=True)
 
     def train(self, args):
         train_dataset = load_data(args)
@@ -79,6 +89,17 @@ class TrainVQGAN:
                     self.opt_vq.step()
                     self.opt_disc.step()
 
+                    # log tb
+                    self.summary_writer.add_scalars(main_tag='train', tag_scalar_dict=
+                                                    {'perceptual': perceptual_loss.item(),
+                                                     'recon': rec_loss.item(),
+                                                     'G': g_loss.item(),
+                                                     'q_loss': q_loss.item(),
+                                                     'D_real': d_loss_real.item(),
+                                                     'D_fake': d_loss_fake.item()},
+                                                    global_step=self.step
+                                                    )
+
                     if i % 10 == 0:
                         with torch.no_grad():
                             real_fake_images = torch.cat((imgs[:4], decoded_images.add(1).mul(0.5)[:4]))
@@ -89,7 +110,15 @@ class TrainVQGAN:
                         GAN_Loss=np.round(gan_loss.cpu().detach().numpy().item(), 3)
                     )
                     pbar.update(0)
-                torch.save(self.vqgan.state_dict(), os.path.join("checkpoints", f"vqgan_epoch_{epoch}.pt"))
+                    self.step += 1
+
+                # After training epoch, make checkpoint
+                if (epoch + 1) % args.save_every == 0:
+                    torch.save({'state_dict': {'vqgan': self.vqgan.state_dict(),
+                                               'disc': self.discriminator.state_dict()},
+                                'iter': self.step
+                                },
+                               os.path.join(args.checkpoint_dir, f"vqgan_epoch_{epoch}.pt"))
 
 
 if __name__ == '__main__':
@@ -111,6 +140,9 @@ if __name__ == '__main__':
     parser.add_argument('--rec-loss-factor', type=float, default=1., help='Weighting factor for reconstruction loss.')
     parser.add_argument('--perceptual-loss-factor', type=float, default=1., help='Weighting factor for perceptual loss.')
     parser.add_argument('--in_channels', type=int, default=3, help='Number of channels in input data')
+    parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints', help='Directory to save model checkpoints')
+    parser.add_argument('--save_every', type=int, default=50, help='save model checkpoint every * epochs')
+    parser.add_argument('--load', type=str, default='', help='Load model from checkpoint, default not loading')
 
     args = parser.parse_args()
     args.dataset_path = r"D:\Documents\repos\streetnetwork\data\imgs"
